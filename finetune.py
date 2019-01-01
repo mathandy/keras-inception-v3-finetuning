@@ -20,12 +20,10 @@ from time import time
 from math import ceil
 
 try:
-    from load_dataset import load_split_data
-    from andnn_util import Timer
+    from andnn.utils import Timer
     from andnn.iotools import image_preloader
 except:
-    from .load_dataset import load_split_data
-    from .andnn_util import Timer
+    from .andnn.utils import Timer
     from .andnn.iotools import image_preloader
 
 

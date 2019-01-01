@@ -4,15 +4,27 @@ import numpy as np
 from sys import stdout
 import os
 from time import time as current_time
-import cv2
+import cv2 as cv
 from PIL import Image, ImageDraw
-from simshow import simshow  # install with pip install simple-imshow
 from imageio import imread, imwrite
 from skimage.transform import resize 
 from skimage.viewer import ImageViewer
 
 
-def show_image_sample(image_directory, grid_shape, extensions=['jpg'],
+def is_readable_image(filename):
+    x = cv.imread(filename)
+    try:
+        x.shape
+    except AttributeError:
+        return False
+    return True
+
+
+def is_image(fn, extensions=('jpg', 'jpeg', 'png')):
+    return os.path.splitext(fn)[1][1:].lower() in extensions
+
+
+def show_image_sample(image_directory, grid_shape, extensions=('jpg',),
                       show=True, output_filename=None, thumbnail_size=100,
                       assert_enough_images=True):
     """Creates image of a grid of images sampled from `image_directory`."""
@@ -21,13 +33,10 @@ def show_image_sample(image_directory, grid_shape, extensions=['jpg'],
         size = (thumbnail_size, thumbnail_size)
     else:
         size = thumbnail_size
-
-    def is_image(filename):
-        return any(filename.lower().endswith(x.lower()) for x in extensions) 
     
-    image_files = [os.path.join(image_directory, fn) 
-                    for fn in os.listdir(image_directory) 
-                        if is_image(fn)]
+    image_files = [os.path.join(image_directory, fn)
+                   for fn in os.listdir(image_directory)
+                   if is_image(fn, extensions)]
 
     assert len(grid_shape) == 2
     if assert_enough_images:
@@ -49,9 +58,11 @@ def show_image_sample(image_directory, grid_shape, extensions=['jpg'],
     if output_filename is not None:
         imwrite(output_filename, grid)
 
+
 def softmax(z):
     ez = np.exp(z - z.max())  # prevents blow-up, suggested in cs231n
     return ez/ez.sum()
+
 
 def pnumber(x, n=5, pad=' '):
     """Takes in a float, outputs a string of length n."""
@@ -188,8 +199,7 @@ def draw_boxes_on_image(image, textboxes, savename=None, show=True):
         del draw
         if savename is not None:
             img.create_checkpoint(savename)
-        if show:
-            simshow(img)
+    return img
 
 
 # def color_in_polygon(points, im, color=1):
@@ -220,7 +230,7 @@ def color_in_polygon(img, points, color=255):
         None
     """
     pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
-    cv2.fillConvexPoly(img, pts, True, color)
+    cv.fillConvexPoly(img, pts, True, color)
 
 
 def boxes2silhouette(boxes, size, dtype=np.float32):
