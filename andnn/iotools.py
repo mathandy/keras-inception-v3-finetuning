@@ -8,7 +8,7 @@ from scipy.misc import imresize
 from sklearn.decomposition import IncrementalPCA
 from skimage.transform import resize
 from imageio import imread
-import cv2 as cv
+from cv2 import resize as cv_resize
 # from tflearn.data_utils import build_hdf5_image_dataset
 
 from andnn.utils import Timer, is_image
@@ -184,7 +184,7 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
 
     Args:
         image_directory (string): The root directory containing all images.
-        size (array-like): The (width, height) images should be re-sized to.
+        size (array-like): The (height, width) images should be re-sized to.
         image_depth: the number of color channels in images.
         label_type (string): see description above.
         pixel_labels_lookup (func): function that returns an image given the
@@ -446,7 +446,7 @@ def load_split_npy_data(npy_dir, samples_per_class, testpart, valpart=0,
                          dtype=cast if cast else x.dtype)
         dsize = resize[:2][::-1]
         for k in range(len(x)):
-            x_new[k] = cv.resize(x[k], dsize=dsize)
+            x_new[k] = cv_resize(x[k], dsize=dsize)
         x = x_new
         if len(resize) == 3 and x.ndim == 3:  # convert to color images
             assert resize[2] == 3

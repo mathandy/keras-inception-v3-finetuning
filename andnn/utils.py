@@ -4,11 +4,12 @@ import numpy as np
 from sys import stdout
 import os
 from time import time as current_time
-import cv2 as cv
 from PIL import Image, ImageDraw
 from imageio import imread, imwrite
 from skimage.transform import resize 
 from skimage.viewer import ImageViewer
+import numpy as np
+import cv2 as cv
 
 
 def is_readable_image(filename):
@@ -22,6 +23,19 @@ def is_readable_image(filename):
 
 def is_image(fn, extensions=('jpg', 'jpeg', 'png')):
     return os.path.splitext(fn)[1][1:].lower() in extensions
+
+
+def resize_images(x, img_shape):
+    x_new = np.empty(shape=(x.shape[0],) + tuple(img_shape),
+                     dtype=x.dtype)
+    dsize = img_shape[:2][::-1]
+    for k in range(x.shape[0]):
+        x_new[k] = cv.resize(x[k], dsize=dsize)
+    x = x_new
+    if len(img_shape) == 3 and x.ndim == 3:  # convert to color images
+        assert img_shape[2] == 3
+        x = np.stack([x] * 3, axis=x.ndim)
+    return x
 
 
 def show_image_sample(image_directory, grid_shape, extensions=('jpg',),

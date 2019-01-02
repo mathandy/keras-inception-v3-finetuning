@@ -11,19 +11,18 @@ from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.callbacks import ModelCheckpoint, EarlyStopping, Callback, TensorBoard
 from keras.optimizers import SGD
 from keras.utils import plot_model
-from keras.backend import resize_images
 from sklearn.metrics import classification_report, confusion_matrix
 import pandas as pd
-import numpy as np
 import os
 from time import time
 from math import ceil
+import tempfile
 
 try:
-    from andnn.utils import Timer
+    from andnn.utils import Timer, resize_images
     from andnn.iotools import image_preloader
 except:
-    from .andnn.utils import Timer
+    from .andnn.utils import Timer, resize_images
     from .andnn.iotools import image_preloader
 
 
@@ -164,66 +163,86 @@ def create_pretrained_model(n_classes, input_shape, input_tensor=None,
     return model
 
 
-def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
-         img_shape=(299, 299, 3), testpart=0.0, valpart=0.2,
-         batch_size=100, epochs=50, samples_per_class=10**3, npy_data=False,
-         cifar10=False, top_only_stage=False, augment=True,
-         checkpoint_path='checkpoint.h5', test_only=False, presplit=False,
-         learning_rate=0.0001, momentum=0.9, n_freeze=312, logdir='logs',
-         run_name=None, epochs_per_epoch=1, preload=False):
+_storage_dir = tempfile.gettempdir()
+def preloader(dataset_dir, img_shape, subset, ignore_cached=True,
+              storage_dir=_storage_dir):
+    subset_storage = os.path.join(storage_dir, 'data_preloader_' + subset)
+    x, y, _, _, _, _, class_names = \
+        image_preloader(os.path.join(dataset_dir, subset),
+                        size=img_shape[:2],
+                        image_depth=img_shape[2],
+                        label_type='subdirectory',
+                        pixel_labels_lookup=None,
+                        exts=('.jpg', '.jpeg', '.png'),
+                        normalize=False,
+                        shuffle=False,
+                        onehot=False,
+                        testpart=0,
+                        validpart=0,
+                        whiten=False,
+                        ignore_existing=ignore_cached,
+                        storage_directory=subset_storage,
+                        save_split_sets=False)
+    return x, y, class_names
 
-    if run_name is None:
-        run_name = 'unnamed_' + str(time())
 
-    # warn if arguments conflict
-    if augment and (npy_data or cifar10):
+def get_training_generators(dataset_dir, img_shape=(299, 299, 3), valpart=0.2,
+                            batch_size=100, cifar10=False, augment=True,
+                            presplit=False,preload=False,
+                            cached_preloading=False):
+
+    # fix or warn about conflicting arguments
+    if cifar10:
+        preload = True
+        presplit = False
+    if augment and cifar10:
         from warnings import warn
         warn("\n\nTo use augmentation, `dataset_dir` must be a directory of "
              "images.  To not get this warning, use to --no_augmentation "
              "flag.\n\n")
 
-    # load data
-    if augment:
-        train_datagen = ImageDataGenerator(rescale=1. / 255,
-                                           shear_range=0.2,
-                                           zoom_range=0.2,
-                                           horizontal_flip=True,
-                                           validation_split=valpart)
-    else:
-        train_datagen = ImageDataGenerator(rescale=1. / 255,
-                                           validation_split=valpart)
-    # test_datagen = ImageDataGenerator(rescale=1. / 255)
-
+    # preload data
     if preload:
         if cifar10:
             from keras.datasets import cifar10
-            (x_train, y_train), (x_test, y_test) = cifar10.load_data()
-            x = np.vstack((x_train, x_test))
-            y = np.vstack((y_train, y_test))
-            x = resize_images(x)
+            (x, y), _ = cifar10.load_data()
+            x = resize_images(x, img_shape)
             class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer',
                            'dog', 'frog', 'horse', 'ship', 'truck']
+        elif presplit and not cifar10:
+            x_train, y_train, class_names = \
+                preloader(dataset_dir, img_shape, 'train', cached_preloading)
+            x_val, y_val, _ = \
+                preloader(dataset_dir, img_shape, 'val', cached_preloading)
         else:
-            x, y, _, _, _, _, class_names = \
-                image_preloader(dataset_dir,
-                                size=img_shape[:2],
-                                image_depth=img_shape[2],
-                                label_type='subdirectory',
-                                pixel_labels_lookup=None,
-                                exts=('.jpg', '.jpeg', '.png'),
-                                normalize=False,
-                                shuffle=False,
-                                onehot=False,
-                                testpart=0,
-                                validpart=0,
-                                whiten=False,
-                                ignore_existing=False,
-                                storage_directory='/tmp/data-preloader/',
-                                save_split_sets=False)
-        train_generator = train_datagen.flow(
-            x=x, y=y, batch_size=batch_size, subset='training')
-        validation_generator = train_datagen.flow(
-            x=x, y=y, batch_size=batch_size, subset='validation')
+            x, y, class_names = preloader(dataset_dir, img_shape,
+                                          ignore_cached=cached_preloading)
+
+    # setup augmentation
+    augmentations = dict()
+    if augment:
+        augmentations.update(dict(shear_range=0.2,
+                                  zoom_range=0.2,
+                                  horizontal_flip=True))
+
+    # create data generator
+    train_datagen = ImageDataGenerator(
+        rescale=1. / 255,
+        validation_split=0.0 if presplit else valpart,
+        **augmentations
+    )
+    if preload:
+        if presplit:
+            train_generator = train_datagen.flow(
+                x=x_train, y=y_train, batch_size=batch_size)
+            validation_generator = train_datagen.flow(
+                x=x_val, y=y_val, batch_size=batch_size)
+        else:
+            train_generator = train_datagen.flow(
+                x=x, y=y, batch_size=batch_size, subset='training')
+            validation_generator = train_datagen.flow(
+                x=x, y=y, batch_size=batch_size, subset='validation')
+
         batches_per_epoch = int(ceil(len(train_generator.x) / batch_size))
         batches_per_val_epoch = \
             int(ceil(len(validation_generator.x) / batch_size))
@@ -247,6 +266,65 @@ def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
         batches_per_val_epoch = \
             int(ceil(len(validation_generator.classes) / batch_size))
         class_names = [l for l in train_generator.class_indices]
+
+    return (train_generator, validation_generator, class_names,
+            batches_per_epoch, batches_per_val_epoch)
+
+
+def get_testing_generator(dataset_dir, img_shape=(299, 299, 3), batch_size=100,
+                          cifar10=False, preload=False,
+                          cached_preloading=False):
+
+    test_datagen = ImageDataGenerator(rescale=1. / 255)
+    if preload:
+        if cifar10:
+            from keras.datasets import cifar10
+            _, (x, y) = cifar10.load_data()
+            x = resize_images(x, img_shape)
+            class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer',
+                           'dog', 'frog', 'horse', 'ship', 'truck']
+        else:
+            x, y, class_names = \
+                preloader(dataset_dir, img_shape, 'test', cached_preloading)
+        test_generator = test_datagen.flow(x=x, y=y, batch_size=batch_size)
+        batches_per_test = int(ceil(len(x) / batch_size))
+    else:
+        test_generator = test_datagen.flow_from_directory(
+            directory=os.path.join(dataset_dir, 'test'),
+            target_size=img_shape[:2],
+            batch_size=batch_size,
+            class_mode='sparse',
+            interpolation="lanczos")
+        batches_per_test = int(ceil(len(test_generator.classes) / batch_size))
+        class_names = [l for l in test_generator.class_indices]
+
+    return test_generator, class_names, batches_per_test
+
+
+def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
+         img_shape=(299, 299, 3), testpart=0.0, valpart=0.2,
+         batch_size=100, epochs=50, samples_per_class=10**3,
+         cifar10=False, top_only_stage=False, augment=True,
+         checkpoint_path='checkpoint.h5', test_only=False, presplit=False,
+         learning_rate=0.0001, momentum=0.9, n_freeze=312, logdir='logs',
+         run_name=None, epochs_per_epoch=1, preload=False, cached_preloading=False):
+
+    if run_name is None:
+        run_name = 'unnamed_' + str(time())
+
+    # fix or warn about conflicting arguments
+    if cifar10:
+        preload = True
+    if augment and cifar10:
+        from warnings import warn
+        warn("\n\nTo use augmentation, `dataset_dir` must be a directory of "
+             "images.  To not get this warning, use to --no_augmentation "
+             "flag.\n\n")
+
+    (train_generator, validation_generator, class_names,
+     batches_per_epoch, batches_per_val_epoch) = get_training_generators(
+        dataset_dir, img_shape, valpart, batch_size, cifar10, augment,
+        presplit, preload, cached_preloading)
 
     # create training callbacks for checkpointing, early stopping, and logging
     callbacks = []
@@ -344,21 +422,33 @@ def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
             shuffle=True,
             initial_epoch=top_only_epochs)
 
-    # score over test data
+    # score over test data (if saved, use checkpoint)
+    if checkpoint_path is not None:
+        model.load_weights(checkpoint_path)
+
+    if presplit or cifar10:
+        test_generator, class_names, batches_per_test = \
+            get_testing_generator(dataset_dir, img_shape, batch_size, cifar10,
+                                  preload, cached_preloading)
+    elif not test_only:
+        test_generator = validation_generator
+    else:
+        raise ValueError('`test_only` can only be true if `presplit` or `cifar10`.')
+
     print("Test Results:\n" + '='*13)
-    y_pred = model.predict_generator(generator=validation_generator,
+    y_pred = model.predict_generator(generator=test_generator,
                                      steps=batches_per_val_epoch
                                      ).argmax(axis=1)
-    metrics = model.evaluate_generator(generator=validation_generator,
+    metrics = model.evaluate_generator(generator=test_generator,
                                        steps=batches_per_val_epoch)
     for metric, val in zip(model.metrics_names, metrics):
         print(metric, val)
 
     # print confusion matrix and scikit-image classification report
     if not preload:
-        y_test = validation_generator.classes
+        y_test = test_generator.classes
     else:
-        y_test = validation_generator.y
+        y_test = test_generator.y
     cm = pd.DataFrame(confusion_matrix(y_test, y_pred), columns=class_names)
     cm.index = class_names
     print('Confusion Matrix')
@@ -394,24 +484,20 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "dataset_dir",
-        help="If --npy invoked, an (unsplit) directory of NPY files.  "
-             "Otherwise a split dataset of image files containing two "
-             "subdirectories, 'train' and 'test' each containing a "
-             "subdirectory for each class.  Use 'cifar10' to use the "
-             "cifar10 dataset.")
+        help="A split or unsplit dataset of images w/ subdirectory labels."
+             "If --presplit flag is invoked,  `dataset_dir` must contain"
+             "subdirectories, 'train' and 'val' (and optionally 'test')."
+             "Use 'cifar10' to use the cifar10 dataset as a test.")
     parser.add_argument(
-        "--presplit", default=False, action='store_true',
+        '-s', "--presplit", default=False, action='store_true',
         help="The image directory is already split into train and test sets.")
     parser.add_argument(
-        "--no_augmentation", default=False, action='store_true',
+        '-a', "--augment", default=False, action='store_true',
         help="Invoke to prevent augmentation.")
     parser.add_argument(
         "--base", default='inceptionv3',
         help="Base model to use. Use 'tinycnn' to train a small CNN from "
              "scratch.")
-    parser.add_argument(
-        "--npy", default=False, action='store_true',
-        help="`dataset_dir` is directory of NPY files.")
     parser.add_argument(
         '--pretrained_weights', default=None,
         help="Model weights (.h5) file to use start with. Omit this flag"
@@ -450,10 +536,10 @@ if __name__ == '__main__':
         help="Where to save the model weights.  Defaults (roughly speaking) "
              "to '<base_model>-<dataset>.h5'.")
     parser.add_argument(
-        "--learning_rate", default=0.0001, type=float,
+        "--learning_rate", default=0.01, type=float,
         help="SGD learning rate")
     parser.add_argument(
-        "--momentum", default=0.9, type=float,
+        "--momentum", default=0.0, type=float,
         help="SGD momentum term coefficient")
     parser.add_argument(
         "--n_freeze", default=0, type=int,
@@ -465,8 +551,14 @@ if __name__ == '__main__':
         "--run_name", default=None,
         help="Name to use for run in logs.")
     parser.add_argument(
-        "--preload", default=False, action='store_true',
+        '-p', "--preload", default=False, action='store_true',
         help="If invoked, dataset will be preloaded.")
+    parser.add_argument(
+        '-c', "--cached_preloading", default=False, action='store_true',
+        help="Speed up preloading by looking for npy files stored in "
+             "TMPDIR from previous runs.  This will speed things up "
+             "significantly is only appropriate when you want to reuse "
+             "the split dataset created in the last run.")
     args = parser.parse_args()
 
     _image_shape = (args.size, args.size, args.channels)
@@ -500,10 +592,9 @@ if __name__ == '__main__':
          batch_size=args.batch_size,
          epochs=args.epochs,
          samples_per_class=args.samples_per_class,
-         npy_data=args.npy,
          cifar10=_cifar10,
          top_only_stage=args.top_only_stage,
-         augment=not args.no_augmentation,
+         augment=args.augment,
          checkpoint_path=args.checkpoint_path,
          test_only=args.test_only,
          presplit=args.presplit,
