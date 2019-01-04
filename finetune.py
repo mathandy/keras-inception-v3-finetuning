@@ -8,6 +8,8 @@ keras fork](https://github.com/datumbox/keras@fork/keras2.2.4)
 For details see
 https://github.com/keras-team/keras/pull/9965
 """
+
+
 from __future__ import print_function, division, absolute_import
 import tensorflow as tf
 from keras.metrics import sparse_top_k_categorical_accuracy
@@ -27,14 +29,12 @@ from time import time
 from math import ceil
 import tempfile
 
-from andnn.utils import resize_images
-from andnn.iotools import image_preloader
-# try:
-#     from andnn.utils import resize_images
-#     from andnn.iotools import image_preloader
-# except:
-#     from .andnn.utils import resize_images
-#     from .andnn.iotools import image_preloader
+try:
+    from andnn.utils import resize_images
+    from andnn.iotools import image_preloader
+except:
+    from .andnn.utils import resize_images
+    from .andnn.iotools import image_preloader
 
 
 def top_3_error(y_true, y_pred):
@@ -168,9 +168,9 @@ def create_pretrained_model(n_classes, input_shape, input_tensor=None,
     # import ipdb; ipdb.set_trace()  ### DEBUG
 
     # compile
-    # model.compile(optimizer=SGD(lr=learning_rate, momentum=momentum),
-    #               loss=loss, metrics=metrics)
-    model.compile(optimizer='rmsprop', loss=loss, metrics=metrics)
+    model.compile(optimizer=SGD(lr=learning_rate, momentum=momentum),
+                  loss=loss, metrics=metrics)
+    # model.compile(optimizer='rmsprop', loss=loss, metrics=metrics)
     return model
 
 
