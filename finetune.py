@@ -1,6 +1,14 @@
 #!/usr/bin/env python
-"""Finetune Inception V3 (pre-trained on ImageNet)."""
+"""Finetune Inception V3 (pre-trained on ImageNet).
 
+Important note
+--------------
+Currently, for much better results, use [the datumbox
+keras fork](https://github.com/datumbox/keras@fork/keras2.2.4)
+For details see
+https://github.com/keras-team/keras/pull/9965
+"""
+from __future__ import print_function, division, absolute_import
 import tensorflow as tf
 from keras.metrics import sparse_top_k_categorical_accuracy
 from keras import applications
@@ -13,17 +21,20 @@ from keras.optimizers import SGD
 from keras.utils import plot_model
 from sklearn.metrics import classification_report, confusion_matrix
 import pandas as pd
+import numpy as np
 import os
 from time import time
 from math import ceil
 import tempfile
 
-try:
-    from andnn.utils import Timer, resize_images
-    from andnn.iotools import image_preloader
-except:
-    from .andnn.utils import Timer, resize_images
-    from .andnn.iotools import image_preloader
+from andnn.utils import resize_images
+from andnn.iotools import image_preloader
+# try:
+#     from andnn.utils import resize_images
+#     from andnn.iotools import image_preloader
+# except:
+#     from .andnn.utils import resize_images
+#     from .andnn.iotools import image_preloader
 
 
 def top_3_error(y_true, y_pred):
@@ -157,49 +168,39 @@ def create_pretrained_model(n_classes, input_shape, input_tensor=None,
     # import ipdb; ipdb.set_trace()  ### DEBUG
 
     # compile
-    model.compile(optimizer=SGD(lr=learning_rate, momentum=momentum),
-                  loss=loss, metrics=metrics)
-    # model.compile(optimizer='rmsprop', loss=loss, metrics=metrics)
+    # model.compile(optimizer=SGD(lr=learning_rate, momentum=momentum),
+    #               loss=loss, metrics=metrics)
+    model.compile(optimizer='rmsprop', loss=loss, metrics=metrics)
     return model
 
 
 _storage_dir = tempfile.gettempdir()
-def preloader(dataset_dir, img_shape, subset, ignore_cached=True,
+def preloader(dataset_dir, img_shape, subset='', cached_preloading=False,
               storage_dir=_storage_dir):
     subset_storage = os.path.join(storage_dir, 'data_preloader_' + subset)
+    image_dir = os.path.join(dataset_dir, subset) if subset else dataset_dir
     x, y, _, _, _, _, class_names = \
-        image_preloader(os.path.join(dataset_dir, subset),
+        image_preloader(image_dir,
                         size=img_shape[:2],
                         image_depth=img_shape[2],
                         label_type='subdirectory',
                         pixel_labels_lookup=None,
                         exts=('.jpg', '.jpeg', '.png'),
                         normalize=False,
-                        shuffle=False,
+                        shuffle=True,  # keras doesn't shuffle before splitting
                         onehot=False,
                         testpart=0,
                         validpart=0,
                         whiten=False,
-                        ignore_existing=ignore_cached,
+                        ignore_existing=not cached_preloading,
                         storage_directory=subset_storage,
                         save_split_sets=False)
     return x, y, class_names
 
 
-def get_training_generators(dataset_dir, img_shape=(299, 299, 3), valpart=0.2,
-                            batch_size=100, cifar10=False, augment=True,
-                            presplit=False,preload=False,
-                            cached_preloading=False):
-
-    # fix or warn about conflicting arguments
-    if cifar10:
-        preload = True
-        presplit = False
-    if augment and cifar10:
-        from warnings import warn
-        warn("\n\nTo use augmentation, `dataset_dir` must be a directory of "
-             "images.  To not get this warning, use to --no_augmentation "
-             "flag.\n\n")
+def get_training_generators(dataset_dir, img_shape, valpart, batch_size,
+                            cifar10, augment, presplit, preload,
+                            cached_preloading):
 
     # preload data
     if preload:
@@ -215,8 +216,8 @@ def get_training_generators(dataset_dir, img_shape=(299, 299, 3), valpart=0.2,
             x_val, y_val, _ = \
                 preloader(dataset_dir, img_shape, 'val', cached_preloading)
         else:
-            x, y, class_names = preloader(dataset_dir, img_shape,
-                                          ignore_cached=cached_preloading)
+            x, y, class_names = \
+                preloader(dataset_dir, img_shape, '', cached_preloading)
 
     # setup augmentation
     augmentations = dict()
@@ -242,38 +243,36 @@ def get_training_generators(dataset_dir, img_shape=(299, 299, 3), valpart=0.2,
                 x=x, y=y, batch_size=batch_size, subset='training')
             validation_generator = train_datagen.flow(
                 x=x, y=y, batch_size=batch_size, subset='validation')
-
-        batches_per_epoch = int(ceil(len(train_generator.x) / batch_size))
-        batches_per_val_epoch = \
-            int(ceil(len(validation_generator.x) / batch_size))
+        n_train = len(train_generator.x)
+        n_val = len(validation_generator.x)
     else:
         train_generator = train_datagen.flow_from_directory(
-            os.path.join(dataset_dir, 'train') if presplit else dataset_dir,
+            directory=os.path.join(dataset_dir, 'train') if presplit else dataset_dir,
             target_size=img_shape[:2],
             batch_size=batch_size,
             class_mode='sparse',
             interpolation="lanczos",
             subset=None if presplit else 'training')
         validation_generator = train_datagen.flow_from_directory(
-            os.path.join(dataset_dir, 'val') if presplit else dataset_dir,
+            directory=os.path.join(dataset_dir, 'val') if presplit else dataset_dir,
             target_size=img_shape[:2],
             batch_size=batch_size,
             class_mode='sparse',
             interpolation="lanczos",
             subset=None if presplit else 'validation')
-        batches_per_epoch = \
-            int(ceil(len(train_generator.classes) / batch_size))
-        batches_per_val_epoch = \
-            int(ceil(len(validation_generator.classes) / batch_size))
+        n_val = len(validation_generator.classes)
+        n_train = len(train_generator.classes)
         class_names = [l for l in train_generator.class_indices]
 
+    print('Training/Validation samples found: %s, %s' % (n_train, n_val))
+    batches_per_epoch = int(ceil(n_train / batch_size))
+    batches_per_val_epoch = int(ceil(n_val / batch_size))
     return (train_generator, validation_generator, class_names,
             batches_per_epoch, batches_per_val_epoch)
 
 
-def get_testing_generator(dataset_dir, img_shape=(299, 299, 3), batch_size=100,
-                          cifar10=False, preload=False,
-                          cached_preloading=False):
+def get_testing_generator(dataset_dir, img_shape, batch_size, cifar10,
+                          preload, cached_preloading):
 
     test_datagen = ImageDataGenerator(rescale=1. / 255)
     if preload:
@@ -302,24 +301,38 @@ def get_testing_generator(dataset_dir, img_shape=(299, 299, 3), batch_size=100,
 
 
 def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
-         img_shape=(299, 299, 3), testpart=0.0, valpart=0.2,
-         batch_size=100, epochs=50, samples_per_class=10**3,
-         cifar10=False, top_only_stage=False, augment=True,
-         checkpoint_path='checkpoint.h5', test_only=False, presplit=False,
-         learning_rate=0.0001, momentum=0.9, n_freeze=312, logdir='logs',
-         run_name=None, epochs_per_epoch=1, preload=False, cached_preloading=False):
+         img_shape=(299, 299, 3), valpart=0.2, batch_size=100, epochs=50,
+         augment=True, checkpoint_path='checkpoint.h5', test_only=False,
+         presplit=False, learning_rate=0.0001, momentum=0.9, n_freeze=312,
+         logdir='logs', run_name=None, epochs_per_epoch=1, preload=False,
+         cached_preloading=False, verbose=False):
 
+    # parse arguments and fix or warn about conflicting arguments
+    cifar10 = (dataset_dir == 'cifar10')
+    if cifar10:
+        preload = True
+        presplit = False
+
+    if checkpoint_path is None:
+            d = dataset_dir.strip(os.sep).split(os.sep)[-1]
+            checkpoint_path = "%s-%s.h5" % (args.base, d)
+    elif checkpoint_path == 'off':
+        checkpoint_path = None
+
+    if args.presplit:
+        args.valpart = 0.0
     if run_name is None:
         run_name = 'unnamed_' + str(time())
 
-    # fix or warn about conflicting arguments
-    if cifar10:
-        preload = True
     if augment and cifar10:
         from warnings import warn
         warn("\n\nTo use augmentation, `dataset_dir` must be a directory of "
              "images.  To not get this warning, use to --no_augmentation "
              "flag.\n\n")
+
+    if verbose:
+        from pprint import pprint
+        pprint(vars(args))
 
     (train_generator, validation_generator, class_names,
      batches_per_epoch, batches_per_val_epoch) = get_training_generators(
@@ -374,22 +387,35 @@ def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
     if pretrained_weights is not None:
         model.load_weights(pretrained_weights)
 
-    plot_model(model, to_file='model.png')
+    if verbose:
+        # create nice graphviz graph visualization of model
+        plot_model(model, to_file='model.png')
 
-    for k, l in enumerate(model.layers):
-        # print(k, list(l.__dict__.values())[12:])
-        print(k, l.name, l.trainable)
+        # print the layer names
+        for k, l in enumerate(model.layers):
+            # print(k, list(l.__dict__.values())[12:])
+            print(k, l.name, l.trainable)
     # import ipdb; ipdb.set_trace()  ### DEBUG
 
     # train model
     if not test_only:
-        # stage 1 fine-tuning (top only)
-        if top_only_stage:
-            top_only_epochs = 3
-            print("\nStage 1 training (top only)...\n")
-            stage1_history = model.fit_generator(
+        checkpoint_epoch = 0
+        stages = [n_freeze] if n_freeze else [311, 280, 249]
+        for stage in stages:
+            for layer in model.layers[:stage]:
+                layer.trainable = False
+            for layer in model.layers[stage:]:
+                layer.trainable = True
+            # model.compile(optimizer='adam',
+            #               loss='sparse_categorical_crossentropy',
+            #               metrics=['accuracy'])
+            model.compile(optimizer=SGD(lr=learning_rate, momentum=momentum),
+                          loss='sparse_categorical_crossentropy',
+                          metrics=['accuracy'])
+
+            history = model.fit_generator(
                 train_generator,
-                epochs=top_only_epochs,
+                epochs=epochs,
                 steps_per_epoch=batches_per_epoch * epochs_per_epoch,
                 verbose=1,
                 callbacks=callbacks,
@@ -400,27 +426,9 @@ def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
                 workers=2,
                 use_multiprocessing=True,
                 shuffle=True,
-                initial_epoch=0)
-        else:
-            top_only_epochs = 0
-
-            if top_only_stage:
-                print("\nStage 2 training (last two inception "
-                      "blocks + top)...\n")
-        history = model.fit_generator(
-            train_generator,
-            epochs=epochs - top_only_epochs,
-            steps_per_epoch=batches_per_epoch * epochs_per_epoch,
-            verbose=1,
-            callbacks=callbacks,
-            validation_data=validation_generator,
-            validation_steps=batches_per_val_epoch,
-            class_weight=None,
-            max_queue_size=10,
-            workers=2,
-            use_multiprocessing=True,
-            shuffle=True,
-            initial_epoch=top_only_epochs)
+                initial_epoch=checkpoint_epoch)
+            checkpoint_epoch = np.argmax(history.history['val_acc'])
+            model.load_weights(checkpoint_path)
 
     # score over test data (if saved, use checkpoint)
     if checkpoint_path is not None:
@@ -455,27 +463,6 @@ def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
     print(cm)
     print('Classification Report')
     print(classification_report(y_test, y_pred, target_names=class_names))
-
-    # # Plot training & validation accuracy values
-    # import matplotlib; matplotlib.use('agg')  # for when running over SSH
-    # import matplotlib.pyplot as plt
-
-    # plt.plot(history.history['acc'])
-    # plt.plot(history.history['val_acc'])
-    # plt.title('Model accuracy')
-    # plt.ylabel('Accuracy')
-    # plt.xlabel('Epoch')
-    # plt.legend(['Training', 'Validation'], loc='upper left')
-    # plt.savefig('history-accuracy_' + run_name + '.png')
-    #
-    # # Plot training & validation loss values
-    # plt.plot(history.history['loss'])
-    # plt.plot(history.history['val_loss'])
-    # plt.title('Model loss')
-    # plt.ylabel('Loss')
-    # plt.xlabel('Epoch')
-    # plt.legend(['Training', 'Validation'], loc='upper left')
-    # plt.savefig('history-validation_' + run_name + '.png')
 
 
 if __name__ == '__main__':
@@ -516,20 +503,10 @@ if __name__ == '__main__':
         "--epochs", default=50, type=int,
         help="Training epochs.")
     parser.add_argument(
-        "--samples_per_class", default=10**3, type=int,
-        help="Number of samples to include per class (ignored unless "
-             "--npy flag invoked).")
-    parser.add_argument(
-        "--testpart", default=0.0, type=float,
-        help="Fraction of data to use for test set.")
-    parser.add_argument(
         "--valpart", default=0.2, type=float,
         help="Fraction of data to use for validation.")
     parser.add_argument(
-        "--top_only_stage", default=False, action='store_true',
-        help="Train for a few epochs on only the top of the model.")
-    parser.add_argument(
-        "--checkpoint_path", default='off',
+        "--checkpoint_path", default='checkpoint.h5',
         help="Where to save the model weights. Use 'off' to not save.")
     parser.add_argument(
         "--test_only", default=False, action='store_true',
@@ -559,41 +536,18 @@ if __name__ == '__main__':
              "TMPDIR from previous runs.  This will speed things up "
              "significantly is only appropriate when you want to reuse "
              "the split dataset created in the last run.")
+    parser.add_argument(
+        '-v', "--verbose", default=False, action='store_true',
+        help="Tell me more about the model I'm running.")
     args = parser.parse_args()
-
-    _image_shape = (args.size, args.size, args.channels)
-
-    if args.dataset_dir == 'cifar10':
-        args.dataset_dir = None
-        _cifar10 = True
-        args.preload = True
-    else:
-        _cifar10 = False
-
-    if args.checkpoint_path is None:
-        if _cifar10:
-            args.checkpoint_path = "%s-cifar10.h5" % args.base
-        else:
-            d = args.dataset_dir.strip(os.sep).split(os.sep)[-1]
-            args.checkpoint_path = \
-                "%s-%s.h5" % (args.base, d)
-    elif args.checkpoint_path == 'off':
-        args.checkpoint_path = None
-
-    from pprint import pprint
-    pprint(vars(args))
 
     main(dataset_dir=args.dataset_dir,
          base=args.base,
          pretrained_weights=args.pretrained_weights,
-         img_shape=_image_shape,
-         testpart=args.testpart,
+         img_shape=(args.size, args.size, args.channels),
          valpart=args.valpart,
          batch_size=args.batch_size,
          epochs=args.epochs,
-         samples_per_class=args.samples_per_class,
-         cifar10=_cifar10,
-         top_only_stage=args.top_only_stage,
          augment=args.augment,
          checkpoint_path=args.checkpoint_path,
          test_only=args.test_only,
@@ -603,4 +557,6 @@ if __name__ == '__main__':
          n_freeze=args.n_freeze,
          logdir=args.logdir,
          run_name=args.run_name,
-         preload=args.preload)
+         preload=args.preload,
+         cached_preloading=args.cached_preloading,
+         verbose=args.verbose)
