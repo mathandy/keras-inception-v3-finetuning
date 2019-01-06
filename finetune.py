@@ -30,11 +30,11 @@ from math import ceil
 import tempfile
 
 try:
-    from andnn.utils import resize_images
-    from andnn.iotools import image_preloader
+    from utils import resize_images
+    from iotools import image_preloader
 except:
-    from .andnn.utils import resize_images
-    from .andnn.iotools import image_preloader
+    from .utils import resize_images
+    from .iotools import image_preloader
 
 
 _tmp_storage_dir = os.path.join(tempfile.gettempdir(), 'finetune')
