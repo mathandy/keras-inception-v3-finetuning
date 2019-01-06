@@ -37,6 +37,9 @@ except:
     from .andnn.iotools import image_preloader
 
 
+_tmp_storage_dir = os.path.join(tempfile.gettempdir(), 'finetune')
+
+
 def top_3_error(y_true, y_pred):
     return 1 - sparse_top_k_categorical_accuracy(y_true, y_pred, k=3)
 
@@ -153,7 +156,7 @@ def create_pretrained_model(n_classes, input_shape, input_tensor=None,
     model = Model(inputs=inputs, outputs=outputs)
 
     # freeze some layers
-    # n_freeze = 314 - 65  # train top two inception blocks + head
+    # n_freeze = 314 - 65  # retrain top two inception blocks + head
     if n_freeze:
         for layer in model.layers[:n_freeze]:
             layer.trainable = False
@@ -174,9 +177,8 @@ def create_pretrained_model(n_classes, input_shape, input_tensor=None,
     return model
 
 
-_storage_dir = tempfile.gettempdir()
 def preloader(dataset_dir, img_shape, subset='', cached_preloading=False,
-              storage_dir=_storage_dir):
+              storage_dir=_tmp_storage_dir):
     subset_storage = os.path.join(storage_dir, 'data_preloader_' + subset)
     image_dir = os.path.join(dataset_dir, subset) if subset else dataset_dir
     x, y, _, _, _, _, class_names = \
@@ -212,7 +214,7 @@ def get_training_generators(dataset_dir, img_shape, valpart, batch_size,
                            'dog', 'frog', 'horse', 'ship', 'truck']
         elif presplit and not cifar10:
             x_train, y_train, class_names = \
-                preloader(dataset_dir, img_shape, 'train', cached_preloading)
+                preloader(dataset_dir, img_shape, 'retrain', cached_preloading)
             x_val, y_val, _ = \
                 preloader(dataset_dir, img_shape, 'val', cached_preloading)
         else:
@@ -247,7 +249,7 @@ def get_training_generators(dataset_dir, img_shape, valpart, batch_size,
         n_val = len(validation_generator.x)
     else:
         train_generator = train_datagen.flow_from_directory(
-            directory=os.path.join(dataset_dir, 'train') if presplit else dataset_dir,
+            directory=os.path.join(dataset_dir, 'retrain') if presplit else dataset_dir,
             target_size=img_shape[:2],
             batch_size=batch_size,
             class_mode='sparse',
@@ -300,12 +302,12 @@ def get_testing_generator(dataset_dir, img_shape, batch_size, cifar10,
     return test_generator, class_names, batches_per_test
 
 
-def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
-         img_shape=(299, 299, 3), valpart=0.2, batch_size=100, epochs=50,
-         augment=True, checkpoint_path='checkpoint.h5', test_only=False,
-         presplit=False, learning_rate=0.0001, momentum=0.9, n_freeze=312,
-         logdir='logs', run_name=None, epochs_per_epoch=1, preload=False,
-         cached_preloading=False, verbose=False):
+def retrain(dataset_dir, base='inceptionv3', pretrained_weights=None,
+            img_shape=(299, 299, 3), valpart=0.2, batch_size=100, epochs=50,
+            augment=True, checkpoint_path='checkpoint.h5', test_only=False,
+            presplit=False, learning_rate=0.0001, momentum=0.9, n_freeze=312,
+            logdir='logs', run_name=None, epochs_per_epoch=1, preload=False,
+            cached_preloading=False, verbose=False):
 
     # parse arguments and fix or warn about conflicting arguments
     cifar10 = (dataset_dir == 'cifar10')
@@ -397,7 +399,7 @@ def main(dataset_dir, base='inceptionv3', pretrained_weights=None,
             print(k, l.name, l.trainable)
     # import ipdb; ipdb.set_trace()  ### DEBUG
 
-    # train model
+    # retrain model
     if not test_only:
         checkpoint_epoch = 0
         stages = [n_freeze] if n_freeze else [311, 280, 249]
@@ -473,23 +475,23 @@ if __name__ == '__main__':
         "dataset_dir",
         help="A split or unsplit dataset of images w/ subdirectory labels."
              "If --presplit flag is invoked,  `dataset_dir` must contain"
-             "subdirectories, 'train' and 'val' (and optionally 'test')."
+             "subdirectories, 'retrain' and 'val' (and optionally 'test')."
              "Use 'cifar10' to use the cifar10 dataset as a test.")
     parser.add_argument(
         '-s', "--presplit", default=False, action='store_true',
-        help="The image directory is already split into train and test sets.")
+        help="The image directory is already split into retrain and test sets.")
     parser.add_argument(
         '-a', "--augment", default=False, action='store_true',
         help="Invoke to prevent augmentation.")
     parser.add_argument(
         "--base", default='inceptionv3',
-        help="Base model to use. Use 'tinycnn' to train a small CNN from "
+        help="Base model to use. Use 'tinycnn' to retrain a small CNN from "
              "scratch.")
     parser.add_argument(
         '--pretrained_weights', default=None,
         help="Model weights (.h5) file to use start with. Omit this flag"
              "to use weights pretrained ImageNet or 'scratch' to "
-             "train from scratch.")
+             "retrain from scratch.")
     parser.add_argument(
         "--size", default=299, type=int,
         help="Images will be resized to `size` x `size`.")
@@ -506,7 +508,8 @@ if __name__ == '__main__':
         "--valpart", default=0.2, type=float,
         help="Fraction of data to use for validation.")
     parser.add_argument(
-        "--checkpoint_path", default='checkpoint.h5',
+        "--checkpoint_path",
+        default=os.path.join(_tmp_storage_dir, 'checkpoint.h5'),
         help="Where to save the model weights. Use 'off' to not save.")
     parser.add_argument(
         "--test_only", default=False, action='store_true',
@@ -522,7 +525,7 @@ if __name__ == '__main__':
         "--n_freeze", default=0, type=int,
         help="Number of (from bottom) layers to freeze.  Use 0 for head only.")
     parser.add_argument(
-        "--logdir", default='logs',
+        "--logdir", default=os.path.join(_tmp_storage_dir, 'logs'),
         help="Where to store tensorboard logs.")
     parser.add_argument(
         "--run_name", default=None,
@@ -541,22 +544,22 @@ if __name__ == '__main__':
         help="Tell me more about the model I'm running.")
     args = parser.parse_args()
 
-    main(dataset_dir=args.dataset_dir,
-         base=args.base,
-         pretrained_weights=args.pretrained_weights,
-         img_shape=(args.size, args.size, args.channels),
-         valpart=args.valpart,
-         batch_size=args.batch_size,
-         epochs=args.epochs,
-         augment=args.augment,
-         checkpoint_path=args.checkpoint_path,
-         test_only=args.test_only,
-         presplit=args.presplit,
-         learning_rate=args.learning_rate,
-         momentum=args.momentum,
-         n_freeze=args.n_freeze,
-         logdir=args.logdir,
-         run_name=args.run_name,
-         preload=args.preload,
-         cached_preloading=args.cached_preloading,
-         verbose=args.verbose)
+    retrain(dataset_dir=args.dataset_dir,
+            base=args.base,
+            pretrained_weights=args.pretrained_weights,
+            img_shape=(args.size, args.size, args.channels),
+            valpart=args.valpart,
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            augment=args.augment,
+            checkpoint_path=args.checkpoint_path,
+            test_only=args.test_only,
+            presplit=args.presplit,
+            learning_rate=args.learning_rate,
+            momentum=args.momentum,
+            n_freeze=args.n_freeze,
+            logdir=args.logdir,
+            run_name=args.run_name,
+            preload=args.preload,
+            cached_preloading=args.cached_preloading,
+            verbose=args.verbose)
