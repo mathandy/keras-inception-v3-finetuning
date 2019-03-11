@@ -1,4 +1,4 @@
-""" Split a dataset into a retrain/val/test subsets.
+""" Split a dataset into a train/val/test subsets.
 
 Usage
 -----
@@ -21,9 +21,30 @@ import cv2 as cv
 import numpy as np
 from shutil import copytree
 
+try:
+    from utils import is_image
+except:
+    from .utils import is_image
+
+
+def move_random(src_dir, dst_dir, n=1, extensions=None):
+    files = os.listdir(src_dir)
+    if extensions:
+        files = [f for f in files if is_image(f, extensions)]
+
+    for fn in np.random.choice(files, n, replace=False):
+        os.rename(os.path.join(src_dir, fn),
+                  os.path.join(dst_dir, fn))
+
+
+def move_random_images(src_dir, dst_dir, n=1,
+                       extensions=('jpg', 'jpeg', 'png')):
+    move_random(src_dir=src_dir, dst_dir=dst_dir, n=n,
+                extensions=extensions)
+
 
 def make_subset(split_dir, subset, n_subset, remove_unreadable=False):
-    train_dir = os.path.join(split_dir, 'retrain')
+    train_dir = os.path.join(split_dir, 'train')
     subset_dir = os.path.join(split_dir, subset)
 
     # setup `subset_dir`
@@ -56,7 +77,7 @@ def split_dataset(data_dir, out_dir, n_val, n_test, remove_unreadable=False):
 
     # copy dataset to training dir
     os.mkdir(out_dir)
-    copytree(data_dir, os.path.join(out_dir, 'retrain'))
+    copytree(data_dir, os.path.join(out_dir, 'train'))
 
     if n_val:
         make_subset(out_dir, 'val', n_val, remove_unreadable)

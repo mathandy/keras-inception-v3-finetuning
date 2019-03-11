@@ -1,6 +1,5 @@
 from __future__ import absolute_import, division, print_function
 import tensorflow as tf
-import numpy as np
 from sys import stdout
 import os
 from time import time as current_time
@@ -10,6 +9,18 @@ from skimage.transform import resize
 from skimage.viewer import ImageViewer
 import numpy as np
 import cv2 as cv
+
+
+def rescale_by_height(image, target_height, method=cv.INTER_LANCZOS4):
+    """Rescale `image` to `target_height` (preserving aspect ratio)."""
+    w = int(round(target_height * image.shape[1] / image.shape[0]))
+    return cv.resize(image, (w, target_height), interpolation=method)
+
+
+def rescale_by_width(image, target_width, method=cv.INTER_LANCZOS4):
+    """Rescale `image` to `target_width` (preserving aspect ratio)."""
+    h = int(round(target_width * image.shape[0] / image.shape[1]))
+    return cv.resize(image, (target_width, h), interpolation=method)
 
 
 def is_readable_image(filename):
@@ -25,17 +36,36 @@ def is_image(fn, extensions=('jpg', 'jpeg', 'png')):
     return os.path.splitext(fn)[1][1:].lower() in extensions
 
 
-def resize_images(x, img_shape):
-    x_new = np.empty(shape=(x.shape[0],) + tuple(img_shape),
-                     dtype=x.dtype)
-    dsize = img_shape[:2][::-1]
-    for k in range(x.shape[0]):
-        x_new[k] = cv.resize(x[k], dsize=dsize)
-    x = x_new
-    if len(img_shape) == 3 and x.ndim == 3:  # convert to color images
+def is_jpeg_or_png(fn):
+    return os.path.splitext(fn)[1][1:].lower() in ('jpg', 'jpeg', 'png')
+
+
+def resize_images(images, max_dim=None, img_shape=None,
+                  interpolation=cv.INTER_LANCZOS4):
+    assert max_dim or img_shape and not (max_dim and img_shape)
+    resized_images = np.empty(shape=(images.shape[0],) + tuple(img_shape),
+                              dtype=images.dtype)
+
+    if img_shape:
+        dsize = img_shape[:2][::-1]
+        for k, image in enumerate(images):
+            resized_images[k] = cv.resize(image, dsize=dsize,
+                                          interpolation=interpolation)
+    else:
+        for k, image in enumerate(images):
+            h, w = image.shape[:2]
+            if h > w:
+                resized_images[k] = \
+                    rescale_by_height(image, max_dim, interpolation)
+            else:
+                resized_images[k] = \
+                    rescale_by_width(image, max_dim, interpolation)
+
+    # convert to color images
+    if len(img_shape) == 3 and resized_images.ndim == 3:
         assert img_shape[2] == 3
-        x = np.stack([x] * 3, axis=x.ndim)
-    return x
+        return np.stack([resized_images] * 3, axis=resized_images.ndim)
+    return resized_images
 
 
 def show_image_sample(image_directory, grid_shape, extensions=('jpg',),
@@ -62,7 +92,7 @@ def show_image_sample(image_directory, grid_shape, extensions=('jpg',),
     for i in range(grid_shape[0]):
         row = []
         for j in range(grid_shape[1]):
-            row.append(resize(imread(sample[i,j]), size))
+            row.append(resize(imread(sample[i, j]), size))
         grid.append(np.concatenate(row, axis=1))
     grid = (255*np.concatenate(grid)).astype('uint8')
 
@@ -95,35 +125,36 @@ def ppercent(x, n=5, pad=' '):
 class Timer:
     """A simple tool for timing code while keeping it pretty."""
 
-    def __init__(self, mes='', pretty_time=True, n=4, pad=' '):
+    def __init__(self, mes='', pretty_time=True, n=4, pad=' ', enable=True):
         self.mes = mes  # append after `mes` + '...'
         self.pretty_time = pretty_time
         self.n = n
         self.pad = pad
+        self.enabled = enable
 
-    @staticmethod
-    def format_time(et, n=4, pad=' '):
-        if et < 60:
-            return '{} sec'.format(pnumber(et, n, pad))
-        elif et < 3600:
-            return '{} min'.format(pnumber(et / 60, n, pad))
+    def format_time(self, et, n=4, pad=' '):
+        if self.pretty_time:
+            if et < 60:
+                return '{} sec'.format(pnumber(et, n, pad))
+            elif et < 3600:
+                return '{} min'.format(pnumber(et / 60, n, pad))
+            else:
+                return '{} hrs'.format(pnumber(et / 3600, n, pad))
         else:
-            return '{} hrs'.format(pnumber(et / 3600, n, pad))
+            return '{} sec'.format(et)
 
     def __enter__(self):
-        stdout.write(self.mes + '...')
-        stdout.flush()
-        self.t0 = current_time()
+        if self.enabled:
+            stdout.write(self.mes + '...')
+            stdout.flush()
+            self.t0 = current_time()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.t1 = current_time()
-        if self.pretty_time:
-            print("done (in {})".format(self.format_time(self.t1 - self.t0,
-                                                         self.n, self.pad)))
-        else:
-            print("done (in {} seconds).".format(self.t1 - self.t0,
-                                                 self.n, self.pad))
-        stdout.flush()
+        if self.enabled:
+            print("done (in {})".format(
+                self.format_time(self.t1 - self.t0, self.n, self.pad)))
+            stdout.flush()
 
 
 def find_nth(big_string, substring, n):

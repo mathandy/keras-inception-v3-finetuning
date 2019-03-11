@@ -11,7 +11,10 @@ from imageio import imread
 from cv2 import resize as cv_resize
 # from tflearn.data_utils import build_hdf5_image_dataset
 
-from andnn.utils import Timer, is_image
+try:
+    from utils import Timer, is_image
+except:
+    from .utils import Timer, is_image
 
 
 exists = os.path.exists
@@ -173,7 +176,7 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
                     shuffle=True, onehot=True, testpart=0, validpart=0,
                     whiten=False, ignore_existing=False,
                     storage_directory=None,
-                    save_split_sets=True, seed=None):
+                    save_split_sets=True, seed=None, verbose=True):
     """Image pre-loader (for use when entire dataset can be loaded in memory).
 
     This function is designed to load images store in directories in one of the
@@ -264,23 +267,23 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
 
         if exists(Yfile) and \
               (exists(Xfile) or (whiten and exists(Xfile_white))):
-            with Timer("loading target data from .npy files"):
+            with Timer("loading target data from .npy files", enable=verbose):
                 Y = np.load(Yfile)
             if whiten:
                 if os.path.exists(Xfile_white):
-                    with Timer("loading whitened data from .npy files"):
+                    with Timer("loading whitened data from .npy files", enable=verbose):
                         X = np.load(Xfile_white)
                 else:
-                    with Timer("loading unwhitened data from .npy files"):
+                    with Timer("loading unwhitened data from .npy files", enable=verbose):
                         X = np.load(Xfile)
 
-                    with Timer('Whitening'):
+                    with Timer('Whitening', enable=verbose):
                         X = incremental_whiten(X)
 
-                    with Timer('Saving whitened data'):
+                    with Timer('Saving whitened data', enable=verbose):
                         np.save(Xfile_white, X)
             else:
-                with Timer("loading input data from .npy file"):
+                with Timer("loading input data from .npy file", enable=verbose):
                     X = np.load(Xfile)
         else:
             mes = 'No numpy file found.'
@@ -290,14 +293,14 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
         _no_npy_found=True
         
     if _no_npy_found:
-        with Timer(mes + 'Loading data from image directories'):
+        with Timer(mes + 'Loading data from image directories', enable=verbose):
 
-            with Timer('Collecting image file names'):
+            with Timer('Collecting image file names', enable=verbose):
                 if label_type == "subdirectory":
                     image_files = []
                     Y = []
                     for k, d in enumerate(class_names):
-                        with Timer(d):
+                        with Timer(d, enable=verbose):
                             fd = join(image_directory, d)
                             image_files_d = [join(fd, fn)
                                              for fn in os.listdir(fd)
@@ -313,7 +316,7 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
                                        for fn in os.listdir(image_directory)
                                        if is_image(fn)]
 
-            with Timer('\tLoading/Resizing images'):
+            with Timer('\tLoading/Resizing images', enable=verbose):
 
                 # initialize arrays
                 X = np.empty((len(image_files), size[0], size[1], image_depth),
@@ -351,7 +354,7 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
                 from time import time
                 seed = int(time())
             print('shuffling dataset with seed = %s' % seed)
-            with Timer('Shuffling'):
+            with Timer('Shuffling', enable=verbose):
                 m = len(Y)
 
                 permutation = np.random.RandomState(seed=seed).permutation(m)
@@ -360,37 +363,37 @@ def image_preloader(image_directory, size, image_depth=3, label_type=False,
                 Y = Y[permutation]
 
         if onehot and label_type == "subdirectory":
-            with Timer('Converting to 1-hot labels'):
+            with Timer('Converting to 1-hot labels', enable=verbose):
                 Y = k21hot(Y)
 
         if storage_directory is not None:
-            with Timer('Saving data (before any normalizing, whitening, and/or '
-                       'splitting)'):
+            with Timer('Saving data (before any normalizing, whitening, '
+                       'and/or splitting)', enable=verbose):
                 np.save(Xfile, X)
                 np.save(Yfile, Y)
 
         if whiten:
-            with Timer('Whitening'):
+            with Timer('Whitening', enable=verbose):
                 X = incremental_whiten(X)
 
             if storage_directory is not None:
-                with Timer('Saving whitening data'):
+                with Timer('Saving whitening data', enable=verbose):
                     np.save(Xfile_white, X)
 
     if normalize and not whiten:
-        with Timer('Normalizing data'):
+        with Timer('Normalizing data', enable=verbose):
             # X = (X - np.mean(X))/np.std(X)
             X -= np.mean(X, axis=0)
             X /= np.std(X, axis=0)
 
     if (testpart or validpart):
-        with Timer('Splitting data into fit/validate/test sets'):
+        with Timer('Splitting data into fit/validate/test sets', enable=verbose):
             X_train, Y_train, X_valid, Y_valid, X_test, Y_test = \
                 split_data(X, Y, validpart, testpart, shuffle=False)
 
         if save_split_sets:
 
-            with Timer('Saving split datasets'):
+            with Timer('Saving split datasets', enable=verbose):
                 np.save(join(storage_directory, 'Xtrain' + s), X_train)
                 np.save(join(storage_directory, 'Ytrain' + s), Y_train)
                 if validpart:
@@ -471,7 +474,8 @@ def load_split_npy_data(npy_dir, samples_per_class, testpart, valpart=0,
 
 
 def save_images_to_npys(image_dir, image_size, output_dir,
-                        problem_images_filename='problem-images.txt'):
+                        problem_images_filename='problem-images.txt',
+                        verbose=True):
     image_size = tuple(image_size)  # dsize
     npy_shapes = []
     problem_images = []
@@ -479,7 +483,7 @@ def save_images_to_npys(image_dir, image_size, output_dir,
         subdir_full = os.path.join(image_dir, subdir)
         if not os.path.isdir(subdir_full):
             continue
-        with Timer('Working on %s' % subdir):
+        with Timer('Working on %s' % subdir, enable=verbose):
             image_fns = [fn for fn in os.listdir(subdir_full) if is_image(fn)]
             # images = np.empty((len(image_fns),) + image_size[::-1] + (3,),
             #                   dtype='uint8')
