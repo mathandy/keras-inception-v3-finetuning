@@ -395,14 +395,14 @@ def retrain(dataset_dir, base='inceptionv3', pretrained_weights='imagenet',
     if pretrained_weights not in ('imagenet', 'scratch'):
         model.load_weights(pretrained_weights)
 
-    if verbose:
+    # if verbose:
         # create nice graphviz graph visualization of model
-        plot_model(model, to_file='model.png')
+        # plot_model(model, to_file='model.png')
 
         # print the layer names
-        for k, l in enumerate(model.layers):
-            # print(k, list(l.__dict__.values())[12:])
-            print(k, l.name, l.trainable)
+        # for k, l in enumerate(model.layers):
+        #     # print(k, list(l.__dict__.values())[12:])
+        #     print(k, l.name, l.trainable)
 
     # train model
     if not test_only:
